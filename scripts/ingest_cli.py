@@ -3,7 +3,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import Base, engine, SessionLocal
-from app.ingest.pipeline import ingest_pdf
+from app.versioning.pipeline import ingest_pdf
 
 def main():
     if len(sys.argv) < 2:

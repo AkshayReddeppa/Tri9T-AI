@@ -30,29 +30,3 @@ def _ingest_tree(db: Session, version: DocumentVersion, root: TreeNode) -> int:
             walk(child, row)
     walk(root, None)
     return count
-
-def ingest_pdf(db: Session, pdf_path: str, document_name: str) -> tuple[DocumentVersion, int]:
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(pdf_path)
-
-    doc = db.query(Document).filter(Document.name == document_name).first()
-    if doc is None:
-        doc = Document(name=document_name)
-        db.add(doc); db.flush()
-
-    next_version = (db.query(DocumentVersion)
-                    .filter(DocumentVersion.document_id == doc.id)
-                    .count()) + 1
-
-    version = DocumentVersion(
-        document_id=doc.id,
-        version_number=next_version,
-        source_filename=os.path.basename(pdf_path),
-    )
-    db.add(version); db.flush()
-
-    blocks = read_pdf(pdf_path)
-    tree = build_tree(blocks, doc_title=document_name)
-    n = _ingest_tree(db, version, tree)
-    db.commit()
-    return version, n
