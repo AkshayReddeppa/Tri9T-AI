@@ -6,9 +6,37 @@ Key invariants enforced:
 - duplicate headings get distinct logical_ids because path differs
 """
 import hashlib
+import re
 from dataclasses import dataclass, field
 from app.ingest.pdf_reader import Block
 from app.ingest.heading_classifier import classify, HeadingInfo
+
+# --- Ligature normalization (stabilizes hashes across fonts/rendering) ---
+_LIGATURES = {
+    "\ufb01": "fi",   # ﬁ
+    "\ufb02": "fl",   # ﬂ
+    "\ufb00": "ff",   # ﬀ
+    "\ufb03": "ffi",  # ﬃ
+    "\ufb04": "ffl",  # ﬄ
+}
+
+
+def _normalize(text: str) -> str:
+    for k, v in _LIGATURES.items():
+        text = text.replace(k, v)
+    # Collapse all whitespace runs (spaces, tabs, newlines, page-break artifacts)
+    # to a single space, then trim. Makes hashes robust to reflow-only changes.
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _median_font(blocks: list[Block]) -> float:
+    sizes = sorted(b.max_font_size for b in blocks if b.max_font_size > 0)
+    return sizes[len(sizes) // 2] if sizes else 10.0
+
 
 @dataclass
 class TreeNode:
@@ -21,17 +49,10 @@ class TreeNode:
     path: str = ""
     content_hash: str = ""
 
-def _hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-def _median_font(blocks: list[Block]) -> float:
-    sizes = sorted(b.max_font_size for b in blocks if b.max_font_size > 0)
-    return sizes[len(sizes) // 2] if sizes else 10.0
 
 def build_tree(blocks: list[Block], doc_title: str = "Document") -> TreeNode:
     med = _median_font(blocks)
     root = TreeNode(heading=doc_title, body="", level=0, order_index=0)
-    # stack of (level, node)
     stack: list[tuple[int, TreeNode]] = [(0, root)]
     body_buf: list[str] = []
     oi = 1
@@ -45,6 +66,15 @@ def build_tree(blocks: list[Block], doc_title: str = "Document") -> TreeNode:
 
     for blk in blocks:
         info: HeadingInfo = classify(blk, med)
+        # v2-style quirk: heading already emitted as its own block, then the
+        # PDF text layer repeats it merged with the body on the next block.
+        # Detect: current block is a heading, has body_remainder, and matches
+        # the immediately-previous node (same level + same title).
+        if (info.is_heading and info.body_remainder
+                and stack and stack[-1][0] == info.level
+                and stack[-1][1].heading == info.title):
+            body_buf.append(info.body_remainder)
+            continue
         if not info.is_heading:
             body_buf.append(blk.text)
             continue
@@ -54,10 +84,22 @@ def build_tree(blocks: list[Block], doc_title: str = "Document") -> TreeNode:
         while len(stack) > 1 and stack[-1][0] >= info.level:
             stack.pop()
 
-        # If jump is > 1 (e.g. 1 -> 1.2.3 with no 1.2), synthesize intermediate
+        # If jump is > 1 (e.g. 1 -> 1.2.3 with no 1.2), synthesize intermediate.
+        # Prefer using the number prefix of the incoming heading for naming.
         if info.level - stack[-1][0] > 1:
             for lvl in range(stack[-1][0] + 1, info.level):
-                syn = TreeNode(heading=f"(Unspecified level {lvl})", body="", level=lvl, order_index=oi)
+                if info.number:
+                    parts = info.number.split(".")
+                    syn_title = ".".join(parts[:lvl])  # e.g. "2.1.1"
+                else:
+                    syn_title = f"(Unspecified level {lvl})"
+                syn = TreeNode(
+                    heading=syn_title,
+                    body="",
+                    level=lvl,
+                    order_index=oi,
+                    number=info.number,
+                )
                 syn.path = _join_path(stack[-1][1].path, syn.heading)
                 syn.content_hash = _hash(syn.heading + "|" + syn.body)
                 stack[-1][1].children.append(syn)
@@ -66,31 +108,35 @@ def build_tree(blocks: list[Block], doc_title: str = "Document") -> TreeNode:
 
         node = TreeNode(
             heading=info.title or info.number or "(untitled)",
-            body="", level=info.level, order_index=oi, number=info.number,
+            body="",
+            level=info.level,
+            order_index=oi,
+            number=info.number,
         )
         node.path = _join_path(stack[-1][1].path, node.heading)
         stack[-1][1].children.append(node)
         stack.append((info.level, node))
         oi += 1
+        if info.body_remainder:
+            body_buf.append(info.body_remainder)
 
     flush_body()
 
-    # Finalize path + hash via DFS (path unique per node even with duplicate headings,
-    # because we append order_index on collision)
     _finalize(root, seen_paths={})
     return root
 
+
 def _join_path(parent_path: str, heading: str) -> str:
     return f"{parent_path} > {heading}" if parent_path else heading
+
 
 def _finalize(node: TreeNode, seen_paths: dict[str, int]) -> None:
     base = node.path or node.heading
     n = seen_paths.get(base, 0)
     seen_paths[base] = n + 1
-    if n > 0:
-        node.path = f"{base} [#{n+1}]"
-    else:
-        node.path = base
-    node.content_hash = _hash(node.heading.strip().lower() + "\n" + node.body.strip())
+    node.path = f"{base} [#{n+1}]" if n > 0 else base
+    node.content_hash = _hash(
+        _normalize(node.heading.strip().lower()) + "\n" + _normalize(node.body.strip())
+    )
     for c in node.children:
         _finalize(c, seen_paths)

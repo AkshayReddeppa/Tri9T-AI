@@ -33,10 +33,12 @@ class Node(Base):
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("nodes.id"), nullable=True)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     heading: Mapped[str] = mapped_column(String, nullable=False)
+    number: Mapped[str | None] = mapped_column(String(20), nullable=True)
     body: Mapped[str] = mapped_column(Text, default="")
     path: Mapped[str] = mapped_column(String, nullable=False, index=True)  # "1 > 1.2 > 1.2.3"
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, default=0)
+    change_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     version = relationship("DocumentVersion", back_populates="nodes")
     children = relationship("Node", backref="parent", remote_side=[id], cascade="all")
