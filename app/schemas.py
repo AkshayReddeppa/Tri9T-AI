@@ -63,3 +63,38 @@ class NodeDiff(BaseModel):
     changed: bool
     versions: list[VersionSummary]
     hunks: list[DiffHunk]
+
+
+# ---- appended for Selection API ----
+from datetime import datetime
+from pydantic import Field
+
+
+class SelectionItemOut(BaseModel):
+    node_id: str
+    node_version_id: str
+    logical_id: str
+    heading: str
+    path: str
+    body: str
+    content_hash: str
+
+
+class SelectionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    node_ids: list[str] = Field(..., min_length=1)
+
+
+class SelectionOut(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+    deduplicated_count: int = 0
+    items: list[SelectionItemOut]
+
+
+class SelectionSummary(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+    item_count: int

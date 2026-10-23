@@ -46,3 +46,28 @@ class Node(Base):
         Index("ix_nodes_version_parent", "version_id", "parent_id"),
         Index("ix_nodes_version_path", "version_id", "path"),
     )
+
+
+class Selection(Base):
+    __tablename__ = "selections"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    items = relationship("SelectionItem", back_populates="selection",
+                         cascade="all, delete-orphan", order_by="SelectionItem.order_index")
+
+
+class SelectionItem(Base):
+    __tablename__ = "selection_items"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    selection_id: Mapped[str] = mapped_column(
+        ForeignKey("selections.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(ForeignKey("nodes.id"), nullable=False)
+    node_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), nullable=False)
+    logical_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    snapshot_heading: Mapped[str] = mapped_column(String, nullable=False)
+    snapshot_path: Mapped[str] = mapped_column(String, nullable=False)
+    snapshot_body: Mapped[str] = mapped_column(Text, default="")
+    snapshot_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    selection = relationship("Selection", back_populates="items")
