@@ -21,11 +21,24 @@ _LIGATURES = {
 }
 
 
+# Unicode whitespace chars that PDF extraction commonly emits.
+# U+202F is the narrow no-break space that produced "â¯" in the LLM output.
+_UNICODE_SPACES = (
+    "\u00A0",  # non-breaking space
+    "\u2007",  # figure space
+    "\u2008",  # punctuation space
+    "\u2009",  # thin space
+    "\u200A",  # hair space
+    "\u202F",  # narrow no-break space   ← the culprit
+    "\u205F",  # medium mathematical space
+    "\u3000",  # ideographic space
+)
+
 def _normalize(text: str) -> str:
     for k, v in _LIGATURES.items():
         text = text.replace(k, v)
-    # Collapse all whitespace runs (spaces, tabs, newlines, page-break artifacts)
-    # to a single space, then trim. Makes hashes robust to reflow-only changes.
+    for u in _UNICODE_SPACES:
+        text = text.replace(u, " ")
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -53,6 +66,7 @@ class TreeNode:
 def build_tree(blocks: list[Block], doc_title: str = "Document") -> TreeNode:
     med = _median_font(blocks)
     root = TreeNode(heading=doc_title, body="", level=0, order_index=0)
+    root.path = doc_title  
     stack: list[tuple[int, TreeNode]] = [(0, root)]
     body_buf: list[str] = []
     oi = 1

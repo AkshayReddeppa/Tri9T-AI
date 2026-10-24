@@ -64,3 +64,20 @@ def test_hash_still_detects_real_edits():
     a = _normalize("Four AA batteries provide 300 cycles.")
     b = _normalize("Four AA batteries provide 250 cycles.")
     assert a != b
+
+
+def test_child_path_includes_root_title():
+    blocks = [_b("1 Section A", size=16.5), _b("1.1 Sub", size=12.9)]
+    root = build_tree(blocks, "MyDoc")
+    paths = []
+    def walk(n):
+        paths.append(n.path)
+        for c in n.children: walk(c)
+    walk(root)
+    assert all(p.startswith("MyDoc") for p in paths), paths
+
+def test_unicode_whitespace_normalized():
+    """PDF narrow no-break space must become ASCII space before hashing."""
+    from app.ingest.tree_builder import _normalize
+    assert _normalize("cuff 299\u202FmmHg") == "cuff 299 mmHg"
+    assert _normalize("cuff\u00A0299\u2009mmHg") == "cuff 299 mmHg"
