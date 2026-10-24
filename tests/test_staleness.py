@@ -181,3 +181,22 @@ def test_multi_node_worst_case_wins(client):
     assert st["overall_severity"] == "critical", st
     statuses = {n["status"] for n in st["nodes"]}
     assert statuses == {"fresh", "stale"}, statuses
+
+def test_malformed_generation_reports_not_applicable(client, monkeypatch):
+    """A MALFORMED generation has no test cases — must not claim 'fresh'."""
+    from app.generation import service
+    from app.llm.base import LLMError
+
+    class BadClient:
+        def generate(self, *a, **kw):
+            raise LLMError("simulated permanent failure")
+
+    monkeypatch.setattr(service, "get_llm_client", lambda: BadClient())
+    hits = client.get("/search?q=overpressure").json()
+    sid = client.post("/selections",
+                      json={"name": "bad", "node_ids": [hits[0]["id"]]}).json()["id"]
+    gen = client.post(f"/selections/{sid}/generate?force=true").json()
+    assert gen["status"] == "MALFORMED"
+    st = client.get(f"/generations/{gen['id']}/staleness").json()
+    assert st["overall_status"] == "not_applicable"
+    assert st["nodes"] == []

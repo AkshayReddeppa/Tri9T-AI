@@ -121,9 +121,21 @@ def _node_staleness(nv: dict, snapshot_body: str, snapshot_path: str,
 
 
 def check_generation(record: dict, db: Session) -> dict:
+    # MALFORMED generations have no parsed test cases — staleness is N/A
+    if record.get("status") != "VALID" or not record.get("parsed"):
+        return {
+            "generation_id": record["id"],
+            "overall_status": "not_applicable",
+            "overall_severity": "none",
+            "reason": f"generation_status={record.get('status', 'unknown')}",
+            "current_version_id": None,
+            "current_version_number": None,
+            "checked_at": datetime.utcnow().isoformat(),
+            "nodes": [],
+        }
+
     nvs = record.get("node_versions", [])
     sections = record.get("sections_used", [])
-
     newest_version = (
         db.query(DocumentVersion)
         .order_by(DocumentVersion.version_number.desc())
