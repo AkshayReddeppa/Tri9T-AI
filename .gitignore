@@ -6,3 +6,10 @@ tri9t.db
 data/raw/*.pdf
 data/generations/*.json
 .pytest_cache/
+# IDE
+.vscode/
+.idea/
+
+# Scratch
+test_script.py
+scratch*
