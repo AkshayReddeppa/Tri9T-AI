@@ -55,15 +55,15 @@ uvicorn app.main:app --reload --port 8000
 ---------------------------------------------------------------------------------------
 ##Environment variables (.env)
 
-Variable	Required	Purpose
-GROQ_API_KEY	Yes (for generation)	
-LLM_PROVIDER	No	groq	groq / gemini / fake
-LLM_MODEL	No	openai/gpt-oss-20b	Model name
-LLM_MAX_ATTEMPTS	No	3	Retry limit for LLM calls
-DATABASE_URL	No	sqlite:///./tri9t.db	SQLite path
-OCR_ENABLED	No	false	Enable PaddleOCR fallback (installs heavy deps)
-GENERATIONS_DIR	No	data/generations	JSON file store for LLM output
-DATA_RAW_DIR	No	data/raw	PDF input folder
+Variable	
+GROQ_API_KEY
+LLM_PROVIDER
+LLM_MODEL
+LLM_MAX_ATTEMPTS
+DATABASE_URL
+OCR_ENABLED
+GENERATIONS_DIR
+DATA_RAW_DIR
 ---------------------------------------------------------------------------------------
 # --- Start clean (optional) ---
 Remove-Item tri9t.db -ErrorAction SilentlyContinue
@@ -91,7 +91,7 @@ Invoke-RestMethod "http://localhost:8000/generations/$($bgen.id)/staleness" | Co
 
 
 ---------------------------------------------------------------------------------------
-
+#Contrast with a fresh section (Overpressure Protection, identical in v1 and v2):
 
 $oid = (Invoke-RestMethod "http://localhost:8000/search?q=overpressure&version=1")[0].id
 $osel = Invoke-RestMethod -Method Post -Uri http://localhost:8000/selections `
@@ -117,8 +117,25 @@ Invoke-RestMethod "http://localhost:8000/search?q=overpressure" | ConvertTo-Json
 $node = (Invoke-RestMethod "http://localhost:8000/search?q=overpressure")[0].id
 Invoke-RestMethod "http://localhost:8000/nodes/$node" | ConvertTo-Json -Depth 3
 ---------------------------------------------------------------------------------------
+API reference
+Full interactive docs: http://localhost:8000/docs
 
-
+Endpoint	Method	Purpose
+/health	GET	Liveness check
+/debug/llm-config	GET	Show running provider, model, key prefix
+/sections?version=latest|N	GET	Top-level sections
+/nodes/{id}	GET	Node detail with body, hash, children
+/search?q=...&version=...	GET	Search heading + body
+/nodes/{id}/diff	GET	Cross-version diff hunks
+/selections	POST	Create version-pinned selection
+/selections	GET	List all selections
+/selections/{id}	GET	Get with pinned snapshots
+/selections/{id}	DELETE	Delete
+/selections/{id}/generate?force=false	POST	Generate test cases
+/generations?selection_id=X&node_id=Y	GET	List with staleness summary
+/generations/{id}	GET	Full record + staleness block
+/generations/{id}/staleness	GET	Staleness-only report
+---------------------------------------------------------------------------------------
 #Test Suite 
 
 pytest -q                          # full suite
