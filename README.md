@@ -102,7 +102,85 @@ $ogen = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/selections/$(
 Invoke-RestMethod "http://localhost:8000/generations/$($ogen.id)/staleness" | ConvertTo-Json -Depth 5
 # → { "overall_status": "fresh", "overall_severity": "none", "reason": "unchanged" }
 ---------------------------------------------------------------------------------------
+#commands that prove the output is real
+#Fetch the actual body text behind each hash
+python -c "
+from app.db import SessionLocal
+from app.models import Node
 
+s = SessionLocal()
+
+h1 = '51688c6b664383f8072cb970aff5f693de9a15f8152193ae0716d82b0b0520e2'
+h2 = '032a488e546604d0efbf72780f256fc17e6bf61eac925f7dabec28eb1c476c50'
+
+n1 = s.query(Node).filter(Node.content_hash == h1).first()
+n2 = s.query(Node).filter(Node.content_hash == h2).first()
+
+print('=== snapshot (v1) ===')
+print('node id    :', n1.id if n1 else 'NOT FOUND')
+print('version_id :', n1.version_id if n1 else '')
+print('heading    :', n1.heading if n1 else '')
+print('body       :')
+print(repr(n1.body) if n1 else '')
+
+print()
+print('=== current (v2) ===')
+print('node id    :', n2.id if n2 else 'NOT FOUND')
+print('version_id :', n2.version_id if n2 else '')
+print('heading    :', n2.heading if n2 else '')
+print('body       :')
+print(repr(n2.body) if n2 else '')
+"
+#Recompute the hash from the body text
+python -c "
+from app.db import SessionLocal
+from app.models import Node
+from app.ingest.tree_builder import _normalize, _hash
+
+s = SessionLocal()
+
+for h in ['51688c6b664383f8072cb970aff5f693de9a15f8152193ae0716d82b0b0520e2',
+          '032a488e546604d0efbf72780f256fc17e6bf61eac925f7dabec28eb1c476c50']:
+    n = s.query(Node).filter(Node.content_hash == h).first()
+    if not n:
+        print(f'{h[:12]}... NOT FOUND in DB'); continue
+    recomputed = _hash(_normalize(n.heading.strip().lower()) + '\n' + _normalize(n.body.strip()))
+    match = '✅ MATCH' if recomputed == h else '❌ MISMATCH'
+    print(f'stored     : {h}')
+    print(f'recomputed : {recomputed}')
+    print(f'verdict    : {match}')
+    print()
+"
+
+#Verify via the API 
+# Get a v1 Battery Life node ID
+$bid_v1 = (Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=1")[0].id
+
+# Fetch the v1 node with full body
+$v1_node = Invoke-RestMethod "http://localhost:8000/nodes/$bid_v1"
+Write-Host "`n=== v1 body ===" -ForegroundColor Cyan
+Write-Host $v1_node.body
+Write-Host "`nv1 hash: $($v1_node.content_hash)" -ForegroundColor Yellow
+
+# Fetch the same node from v2 (find by heading — same logical_id)
+$v2_nodes = Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=2"
+$v2_node = Invoke-RestMethod "http://localhost:8000/nodes/$($v2_nodes[0].id)"
+Write-Host "`n=== v2 body ===" -ForegroundColor Cyan
+Write-Host $v2_node.body
+Write-Host "`nv2 hash: $($v2_node.content_hash)" -ForegroundColor Yellow
+
+# Same-logical-id confirmation
+Write-Host "`n=== logical_id identical? ===" -ForegroundColor Magenta
+Write-Host "v1 logical_id: $($v1_node.logical_id)"
+Write-Host "v2 logical_id: $($v2_node.logical_id)"
+Write-Host "match: $($v1_node.logical_id -eq $v2_node.logical_id)"
+
+# The API-level diff
+Write-Host "`n=== /nodes/{id}/diff hunks ===" -ForegroundColor Cyan
+Invoke-RestMethod "http://localhost:8000/nodes/$bid_v1/diff" | ConvertTo-Json -Depth 5
+
+
+---------------------------------------------------------------------------------------
 #Quick curl 
 # Top-level sections (latest = v2)
 Invoke-RestMethod "http://localhost:8000/sections" | ConvertTo-Json -Depth 3
