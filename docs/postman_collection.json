@@ -1,0 +1,680 @@
+{
+  "info": {
+    "name": "Tri9T AI — CT-200 (versioning + staleness demo)",
+    "_postman_id": "b8f3c2e1-4a5d-4f6e-9c7b-1d2e3f4a5b6c",
+    "description": "End-to-end demo of the Tri9T AI backend. Covers ingestion verification, browse, version-pinned selections, LLM generation, and staleness detection.\n\n**Prerequisites:**\n- Server running at http://localhost:8000\n- Both v1 and v2 PDFs ingested (run `python -m scripts.ingest_cli data/raw/ct200_manual.pdf \"CardioTrack CT-200\"` and the v2 equivalent)\n- Valid GROQ_API_KEY in .env\n\n**How to run:**\n1. Import this collection\n2. Click \"Run\" (top-right of the collection)\n3. All 5 folders execute in order, setting variables between requests\n4. Green checkmarks = everything working; the last step proves the staleness distinction\n\n**Key demonstration:**\n- Battery Life (v1: 300 cycles → v2: 250 cycles) → `stale / critical / numeric_threshold_changed`\n- Overpressure Protection (identical in v1 and v2) → `fresh / none / unchanged`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Setup & health",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API is up', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] }
+          },
+          "response": []
+        },
+        {
+          "name": "LLM config (verify key + model)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('LLM is configured', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.provider).to.eql('groq');",
+                  "    pm.expect(j.groq_key_is_gsk).to.be.true;",
+                  "    pm.expect(j.groq_key_length).to.be.above(40);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/debug/llm-config", "host": ["{{base_url}}"], "path": ["debug", "llm-config"] }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Browse — sections, nodes, search",
+      "item": [
+        {
+          "name": "Sections — latest (v2)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('v2 is latest', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.version_number).to.eql(2);",
+                  "    pm.expect(j.sections.length).to.be.above(8);",
+                  "});",
+                  "pm.test('paths start with doc title', () => {",
+                  "    const sections = pm.response.json().sections;",
+                  "    sections.forEach(s => pm.expect(s.path).to.match(/^CardioTrack/));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/sections", "host": ["{{base_url}}"], "path": ["sections"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Sections — v1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('v1 explicitly', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().version_number).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sections?version=1",
+              "host": ["{{base_url}}"],
+              "path": ["sections"],
+              "query": [{ "key": "version", "value": "1" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Battery Life in v1 (captures node id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('found battery life in v1', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.length).to.be.above(0);",
+                  "    pm.collectionVariables.set('battery_v1_node_id', j[0].id);",
+                  "    pm.collectionVariables.set('battery_v1_hash', j[0].content_hash);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/search?q=battery%20life&version=1",
+              "host": ["{{base_url}}"],
+              "path": ["search"],
+              "query": [
+                { "key": "q", "value": "battery life" },
+                { "key": "version", "value": "1" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Overpressure in v1 (captures node id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('found overpressure in v1', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.length).to.be.above(0);",
+                  "    pm.collectionVariables.set('overpressure_v1_node_id', j[0].id);",
+                  "    pm.collectionVariables.set('overpressure_v1_hash', j[0].content_hash);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/search?q=overpressure&version=1",
+              "host": ["{{base_url}}"],
+              "path": ["search"],
+              "query": [
+                { "key": "q", "value": "overpressure" },
+                { "key": "version", "value": "1" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get node detail — Battery Life (v1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('body mentions 300 cycles (v1 text)', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.body).to.include('300');",
+                  "    pm.expect(j.body).to.include('15');",
+                  "});",
+                  "pm.test('has content hash', () => {",
+                  "    pm.expect(pm.response.json().content_hash).to.be.a('string').with.lengthOf(64);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/nodes/{{battery_v1_node_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["nodes", "{{battery_v1_node_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Diff — Battery Life across v1 and v2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('battery life changed', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.changed).to.be.true;",
+                  "    pm.expect(j.hunks.length).to.be.above(0);",
+                  "});",
+                  "pm.test('diff shows 300 -> 250', () => {",
+                  "    const hunks = pm.response.json().hunks;",
+                  "    const allLines = hunks.flatMap(h => h.lines).join(' ');",
+                  "    pm.expect(allLines).to.match(/-.*300/);",
+                  "    pm.expect(allLines).to.match(/\\+.*250/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/nodes/{{battery_v1_node_id}}/diff",
+              "host": ["{{base_url}}"],
+              "path": ["nodes", "{{battery_v1_node_id}}", "diff"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Selections — version-pinned",
+      "item": [
+        {
+          "name": "Create selection — Battery Life (v1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('selection created', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const j = pm.response.json();",
+                  "    pm.collectionVariables.set('battery_selection_id', j.id);",
+                  "    pm.expect(j.items.length).to.eql(1);",
+                  "});",
+                  "pm.test('snapshot preserved v1 text (300 cycles)', () => {",
+                  "    const item = pm.response.json().items[0];",
+                  "    pm.expect(item.body).to.include('300');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"battery-v1-qa\",\n  \"node_ids\": [\"{{battery_v1_node_id}}\"]\n}"
+            },
+            "url": { "raw": "{{base_url}}/selections", "host": ["{{base_url}}"], "path": ["selections"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create selection — Overpressure (v1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('selection created', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.collectionVariables.set('overpressure_selection_id', pm.response.json().id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"overpressure-v1-qa\",\n  \"node_ids\": [\"{{overpressure_v1_node_id}}\"]\n}"
+            },
+            "url": { "raw": "{{base_url}}/selections", "host": ["{{base_url}}"], "path": ["selections"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get selection — confirm snapshot survives",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('selection retrievable', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.id).to.eql(pm.collectionVariables.get('battery_selection_id'));",
+                  "});",
+                  "pm.test('snapshot still has v1 text', () => {",
+                  "    pm.expect(pm.response.json().items[0].body).to.include('300');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/selections/{{battery_selection_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["selections", "{{battery_selection_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Generate — LLM test cases",
+      "item": [
+        {
+          "name": "Generate — Battery Life (force fresh)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('generation valid', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const j = pm.response.json();",
+                  "    pm.collectionVariables.set('battery_generation_id', j.id);",
+                  "    pm.expect(j.status).to.eql('VALID');",
+                  "    pm.expect(j.provider).to.eql('groq');",
+                  "});",
+                  "pm.test('has 3-5 test cases', () => {",
+                  "    const tcs = pm.response.json().parsed.test_cases;",
+                  "    pm.expect(tcs.length).to.be.within(3, 5);",
+                  "});",
+                  "pm.test('each test case has required fields', () => {",
+                  "    const tcs = pm.response.json().parsed.test_cases;",
+                  "    tcs.forEach(tc => {",
+                  "        pm.expect(tc).to.have.property('title');",
+                  "        pm.expect(tc).to.have.property('steps');",
+                  "        pm.expect(tc).to.have.property('expected_result');",
+                  "        pm.expect(tc.priority).to.be.oneOf(['low','medium','high','critical']);",
+                  "    });",
+                  "});",
+                  "pm.test('prompt hash stored for idempotency', () => {",
+                  "    pm.expect(pm.response.json().prompt_hash).to.be.a('string').with.lengthOf(64);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/selections/{{battery_selection_id}}/generate?force=true",
+              "host": ["{{base_url}}"],
+              "path": ["selections", "{{battery_selection_id}}", "generate"],
+              "query": [{ "key": "force", "value": "true" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Generate — Overpressure (force fresh)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('generation valid', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const j = pm.response.json();",
+                  "    pm.collectionVariables.set('overpressure_generation_id', j.id);",
+                  "    pm.expect(j.status).to.eql('VALID');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/selections/{{overpressure_selection_id}}/generate?force=true",
+              "host": ["{{base_url}}"],
+              "path": ["selections", "{{overpressure_selection_id}}", "generate"],
+              "query": [{ "key": "force", "value": "true" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Idempotency — resubmit without force returns cache hit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('cache hit on resubmit', () => {",
+                  "    pm.response.to.have.status(201);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.cache_hit).to.be.true;",
+                  "    pm.expect(j.id).to.eql(pm.collectionVariables.get('battery_generation_id'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/selections/{{battery_selection_id}}/generate",
+              "host": ["{{base_url}}"],
+              "path": ["selections", "{{battery_selection_id}}", "generate"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Staleness — the core demo",
+      "item": [
+        {
+          "name": "★ Battery staleness — expect STALE / CRITICAL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('battery life is stale', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.overall_status).to.eql('stale');",
+                  "});",
+                  "pm.test('severity is critical (not minor)', () => {",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.overall_severity).to.eql('critical');",
+                  "});",
+                  "pm.test('reason = numeric_threshold_changed', () => {",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.nodes[0].reason).to.eql('numeric_threshold_changed');",
+                  "});",
+                  "pm.test('hashes differ v1 -> v2', () => {",
+                  "    const node = pm.response.json().nodes[0];",
+                  "    pm.expect(node.snapshot_hash).to.not.eql(node.current_hash);",
+                  "});",
+                  "pm.test('snapshot is from v1', () => {",
+                  "    const node = pm.response.json().nodes[0];",
+                  "    pm.expect(node.snapshot_version_id).to.not.eql(node.current_node_id);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/generations/{{battery_generation_id}}/staleness",
+              "host": ["{{base_url}}"],
+              "path": ["generations", "{{battery_generation_id}}", "staleness"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "★ Overpressure staleness — expect FRESH / NONE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('overpressure is fresh', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j.overall_status).to.eql('fresh');",
+                  "});",
+                  "pm.test('severity is none', () => {",
+                  "    pm.expect(pm.response.json().overall_severity).to.eql('none');",
+                  "});",
+                  "pm.test('hashes identical v1 == v2', () => {",
+                  "    const node = pm.response.json().nodes[0];",
+                  "    pm.expect(node.snapshot_hash).to.eql(node.current_hash);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/generations/{{overpressure_generation_id}}/staleness",
+              "host": ["{{base_url}}"],
+              "path": ["generations", "{{overpressure_generation_id}}", "staleness"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Bulk — all generations with staleness summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('returns array', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(Array.isArray(pm.response.json())).to.be.true;",
+                  "});",
+                  "pm.test('battery in list is stale', () => {",
+                  "    const batteryId = pm.collectionVariables.get('battery_generation_id');",
+                  "    const row = pm.response.json().find(r => r.id === batteryId);",
+                  "    pm.expect(row).to.exist;",
+                  "    pm.expect(row.overall_status).to.eql('stale');",
+                  "    pm.expect(row.overall_severity).to.eql('critical');",
+                  "});",
+                  "pm.test('overpressure in list is fresh', () => {",
+                  "    const opId = pm.collectionVariables.get('overpressure_generation_id');",
+                  "    const row = pm.response.json().find(r => r.id === opId);",
+                  "    pm.expect(row).to.exist;",
+                  "    pm.expect(row.overall_status).to.eql('fresh');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/generations", "host": ["{{base_url}}"], "path": ["generations"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Full generation record — includes embedded staleness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('record has staleness block', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const j = pm.response.json();",
+                  "    pm.expect(j).to.have.property('staleness');",
+                  "    pm.expect(j.staleness.overall_status).to.eql('stale');",
+                  "});",
+                  "pm.test('raw_response preserved', () => {",
+                  "    pm.expect(pm.response.json().raw_response).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/generations/{{battery_generation_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["generations", "{{battery_generation_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Cleanup (optional)",
+      "item": [
+        {
+          "name": "Delete battery selection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('deleted', () => pm.response.to.have.status(204));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/selections/{{battery_selection_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["selections", "{{battery_selection_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete overpressure selection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('deleted', () => pm.response.to.have.status(204));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/selections/{{overpressure_selection_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["selections", "{{overpressure_selection_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000" },
+    { "key": "battery_v1_node_id", "value": "" },
+    { "key": "battery_v1_hash", "value": "" },
+    { "key": "overpressure_v1_node_id", "value": "" },
+    { "key": "overpressure_v1_hash", "value": "" },
+    { "key": "battery_selection_id", "value": "" },
+    { "key": "overpressure_selection_id", "value": "" },
+    { "key": "battery_generation_id", "value": "" },
+    { "key": "overpressure_generation_id", "value": "" }
+  ]
+}
