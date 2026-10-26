@@ -29,7 +29,7 @@ Backend API that ingests the **CardioTrack CT-200 Home Blood Pressure Monitor** 
 
 ```bash
 # 1. Clone
-git clone <(https://github.com/AkshayReddeppa/Tri9T-AI)> tri9t-ai
+git clone https://github.com/AkshayReddeppa/tri9t-ai
 cd tri9t-ai
 
 # 2. Create a virtual environment
