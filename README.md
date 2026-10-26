@@ -1,70 +1,135 @@
 # Tri9T AI — CT-200 Ingestion & QA Pipeline
 
-Backend API that ingests the CardioTrack CT-200 Home Blood Pressure Monitor manual
-into a versioned, queryable tree and generates QA test cases from user-selected
-sections — with traceability that survives document re-versioning.
-
-**Stack:** FastAPI · Pydantic v2 · SQLAlchemy 2 · SQLite · Groq (`openai/gpt-oss-20b`) · PyMuPDF · pytest
+Backend API that ingests the **CardioTrack CT-200 Home Blood Pressure Monitor** manual into a versioned, queryable tree and generates QA test cases from user-selected sections — with traceability that survives document re-versioning.
 
 **Assignment:** AI Engineering Internship — Tri9T AI
+**Stack:** FastAPI · Pydantic v2 · SQLAlchemy 2 · SQLite · Groq (`openai/gpt-oss-20b`) · PyMuPDF · pytest
 
 ---
 
 ## Table of contents
 
 - [Quick start](#quick-start)
-- [Environment variables](#environment-variables-env)
-- [The v1 → v2 versioning flow](#how-to-trigger-the-v1--v2-re-ingestion-flow)
+- [Environment variables](#environment-variables)
+- [API reference](#api-reference)
+- [Demo and verification](#demo-and-verification)
+- [Versioning demo (v1 to v2)](#versioning-demo-v1-to-v2)
+- [Verifying the output is real](#verifying-the-output-is-real)
+- [Quick endpoint checks](#quick-endpoint-checks)
 - [Test suite](#test-suite)
 - [Project structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Design decisions](#design-decisions)
 
 ---
----------------------------------------------------------------------------------------
+
 ## Quick start
+
+**Prerequisites:** Python 3.10+, `pip`, and a free Groq API key from <https://console.groq.com/keys>.
 
 ```bash
 # 1. Clone
 git clone <your-repo-url> tri9t-ai
 cd tri9t-ai
 
-# 2. Create virtualenv
+# 2. Create a virtual environment
 python -m venv .venv
-# Windows: .venv\Scripts\activate
+# Windows:     .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
 
-# 3. Install
+# 3. Install dependencies
 pip install -r requirements.txt
 
 # 4. Configure
 cp .env.example .env
-# Edit .env — set GROQ_API_KEY=gsk_...
-# Get free key: https://console.groq.com/keys
+# Edit .env and set GROQ_API_KEY=gsk_...
 
-# 5. Ingest both versions
+# 5. Ingest both manual versions
 python -m scripts.ingest_cli data/raw/ct200_manual.pdf    "CardioTrack CT-200"
 python -m scripts.ingest_cli data/raw/ct200_manual_v2.pdf "CardioTrack CT-200"
 
-# 6. Run tests
+# 6. Run the tests
 pytest -q
 # → all tests pass
 
-# 7. Start API
+# 7. Start the API
 uvicorn app.main:app --reload --port 8000
----------------------------------------------------------------------------------------
-##Environment variables (.env)
+```
 
-Variable	
-GROQ_API_KEY
-LLM_PROVIDER
-LLM_MODEL
-LLM_MAX_ATTEMPTS
-DATABASE_URL
-OCR_ENABLED
-GENERATIONS_DIR
-DATA_RAW_DIR
----------------------------------------------------------------------------------------
+Interactive API docs are then available at <http://localhost:8000/docs>.
+
+> **Note:** the demo commands in this README use PowerShell (`Invoke-RestMethod`). On macOS/Linux, use `curl` or the Postman collection instead.
+
+---
+
+## Environment variables
+
+Configured in `.env` (copy from `.env.example`). The file is **not** hot-reloaded — restart `uvicorn` after editing it.
+
+| Variable | Purpose |
+|---|---|
+| `GROQ_API_KEY` | Groq API key (`gsk_...`) used for test-case generation |
+| `LLM_PROVIDER` | LLM backend: `groq`, `gemini`, or `fake` (deterministic, for tests) |
+| `LLM_MODEL` | Model identifier, e.g. `openai/gpt-oss-20b` |
+| `LLM_MAX_ATTEMPTS` | Maximum LLM calls per generation (retry limit) |
+| `DATABASE_URL` | SQLAlchemy database URL (SQLite by default) |
+| `OCR_ENABLED` | `true` enables the optional PaddleOCR fallback for image-only pages |
+| `GENERATIONS_DIR` | Directory for generated test-case JSON files (`data/generations`) |
+| `DATA_RAW_DIR` | Directory containing the input PDFs (`data/raw`) |
+
+---
+
+## API reference
+
+Full interactive docs: <http://localhost:8000/docs>
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Liveness check |
+| `/debug/llm-config` | GET | Show running provider, model and key prefix |
+| `/sections` | GET | Top-level sections. Optional `?version=latest` (default) or `?version=N` |
+| `/nodes/{id}` | GET | Node detail with body, hash and children |
+| `/search?q=...&version=...` | GET | Search heading and body text |
+| `/nodes/{id}/diff` | GET | Cross-version diff hunks |
+| `/selections` | POST | Create a version-pinned selection |
+| `/selections` | GET | List all selections |
+| `/selections/{id}` | GET | Get a selection with its pinned snapshots |
+| `/selections/{id}` | DELETE | Delete a selection |
+| `/selections/{id}/generate?force=false` | POST | Generate test cases (`force=true` bypasses the cache) |
+| `/generations?selection_id=X&node_id=Y` | GET | List generations with staleness summary |
+| `/generations/{id}` | GET | Full record with staleness block |
+| `/generations/{id}/staleness` | GET | Staleness-only report |
+
+---
+
+## Demo and verification
+
+### Postman collection (recommended)
+
+Import `docs/postman_collection.json`, start the server, and click **Run**. The collection executes the entire versioning and staleness flow end to end with **37 assertions** — all pass on a clean run.
+
+### One-command PowerShell demo
+
+Generate against v1, then check staleness once v2 is ingested:
+
+```powershell
+$bid = (Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=1")[0].id
+$sel = Invoke-RestMethod -Method Post -Uri http://localhost:8000/selections `
+       -ContentType "application/json" `
+       -Body (@{name="demo"; node_ids=@($bid)} | ConvertTo-Json)
+$gen = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/selections/$($sel.id)/generate?force=true"
+
+Invoke-RestMethod "http://localhost:8000/generations/$($gen.id)/staleness" | ConvertTo-Json -Depth 5
+# → overall_status: stale, overall_severity: critical, reason: numeric_threshold_changed
+```
+
+---
+
+## Versioning demo (v1 to v2)
+
+This walkthrough shows how a generation made against v1 becomes **stale** when v2 is ingested. Run it from the repository root with the API server running in another terminal.
+
+```powershell
 # --- Start clean (optional) ---
 Remove-Item tri9t.db -ErrorAction SilentlyContinue
 Remove-Item data/generations/*.json -ErrorAction SilentlyContinue
@@ -75,7 +140,7 @@ python -m scripts.ingest_cli data/raw/ct200_manual.pdf "CardioTrack CT-200"
 
 # --- Generate test cases against a v1 node that changes in v2 ---
 # Battery Life: v1 says "300 cycles, 15%" → v2 says "250 cycles, 10%"
-$bid = (Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=1")[0].id
+$bid  = (Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=1")[0].id
 $bsel = Invoke-RestMethod -Method Post -Uri http://localhost:8000/selections `
         -ContentType "application/json" `
         -Body (@{name="battery-v1-qa"; node_ids=@($bid)} | ConvertTo-Json)
@@ -86,14 +151,16 @@ Write-Host "Generated against v1: $($bgen.status)"
 python -m scripts.ingest_cli data/raw/ct200_manual_v2.pdf "CardioTrack CT-200"
 # → ✅ Ingested v2 — 31 nodes
 
-# --- Check staleness (should be STALE / CRITICAL) ---
+# --- Check staleness (expected: STALE / CRITICAL) ---
 Invoke-RestMethod "http://localhost:8000/generations/$($bgen.id)/staleness" | ConvertTo-Json -Depth 5
+```
 
+### Contrast: a section that did not change
 
----------------------------------------------------------------------------------------
-#Contrast with a fresh section (Overpressure Protection, identical in v1 and v2):
+Overpressure Protection is identical in v1 and v2, so its generation stays **fresh**:
 
-$oid = (Invoke-RestMethod "http://localhost:8000/search?q=overpressure&version=1")[0].id
+```powershell
+$oid  = (Invoke-RestMethod "http://localhost:8000/search?q=overpressure&version=1")[0].id
 $osel = Invoke-RestMethod -Method Post -Uri http://localhost:8000/selections `
         -ContentType "application/json" `
         -Body (@{name="overpressure-v1-qa"; node_ids=@($oid)} | ConvertTo-Json)
@@ -101,9 +168,22 @@ $ogen = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/selections/$(
 
 Invoke-RestMethod "http://localhost:8000/generations/$($ogen.id)/staleness" | ConvertTo-Json -Depth 5
 # → { "overall_status": "fresh", "overall_severity": "none", "reason": "unchanged" }
----------------------------------------------------------------------------------------
-#commands that prove the output is real
-#Fetch the actual body text behind each hash
+```
+
+| Section | v1 → v2 | Expected staleness |
+|---|---|---|
+| Battery Life | `300 cycles, 15%` → `250 cycles, 10%` | `stale` / `critical` (`numeric_threshold_changed`) |
+| Overpressure Protection | identical | `fresh` / `none` (`unchanged`) |
+
+---
+
+## Verifying the output is real
+
+These commands trace a staleness result back to the actual stored text. The two hashes below come from the Battery Life staleness report (`snapshot_hash` and `current_hash`) — **substitute the hashes from your own run** if they differ.
+
+### 1. Fetch the body text behind each hash
+
+```bash
 python -c "
 from app.db import SessionLocal
 from app.models import Node
@@ -131,7 +211,11 @@ print('heading    :', n2.heading if n2 else '')
 print('body       :')
 print(repr(n2.body) if n2 else '')
 "
-#Recompute the hash from the body text
+```
+
+### 2. Recompute each hash from the body text
+
+```bash
 python -c "
 from app.db import SessionLocal
 from app.models import Node
@@ -145,14 +229,17 @@ for h in ['51688c6b664383f8072cb970aff5f693de9a15f8152193ae0716d82b0b0520e2',
     if not n:
         print(f'{h[:12]}... NOT FOUND in DB'); continue
     recomputed = _hash(_normalize(n.heading.strip().lower()) + '\n' + _normalize(n.body.strip()))
-    match = '✅ MATCH' if recomputed == h else '❌ MISMATCH'
+    verdict = 'MATCH' if recomputed == h else 'MISMATCH'
     print(f'stored     : {h}')
     print(f'recomputed : {recomputed}')
-    print(f'verdict    : {match}')
+    print(f'verdict    : {verdict}')
     print()
 "
+```
 
-#Verify via the API 
+### 3. Verify through the API
+
+```powershell
 # Get a v1 Battery Life node ID
 $bid_v1 = (Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=1")[0].id
 
@@ -162,14 +249,14 @@ Write-Host "`n=== v1 body ===" -ForegroundColor Cyan
 Write-Host $v1_node.body
 Write-Host "`nv1 hash: $($v1_node.content_hash)" -ForegroundColor Yellow
 
-# Fetch the same node from v2 (find by heading — same logical_id)
+# Fetch the same section from v2 (same logical_id)
 $v2_nodes = Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=2"
-$v2_node = Invoke-RestMethod "http://localhost:8000/nodes/$($v2_nodes[0].id)"
+$v2_node  = Invoke-RestMethod "http://localhost:8000/nodes/$($v2_nodes[0].id)"
 Write-Host "`n=== v2 body ===" -ForegroundColor Cyan
 Write-Host $v2_node.body
 Write-Host "`nv2 hash: $($v2_node.content_hash)" -ForegroundColor Yellow
 
-# Same-logical-id confirmation
+# Confirm both versions share one logical_id
 Write-Host "`n=== logical_id identical? ===" -ForegroundColor Magenta
 Write-Host "v1 logical_id: $($v1_node.logical_id)"
 Write-Host "v2 logical_id: $($v2_node.logical_id)"
@@ -178,10 +265,13 @@ Write-Host "match: $($v1_node.logical_id -eq $v2_node.logical_id)"
 # The API-level diff
 Write-Host "`n=== /nodes/{id}/diff hunks ===" -ForegroundColor Cyan
 Invoke-RestMethod "http://localhost:8000/nodes/$bid_v1/diff" | ConvertTo-Json -Depth 5
+```
 
+---
 
----------------------------------------------------------------------------------------
-#Quick curl 
+## Quick endpoint checks
+
+```powershell
 # Top-level sections (latest = v2)
 Invoke-RestMethod "http://localhost:8000/sections" | ConvertTo-Json -Depth 3
 
@@ -194,35 +284,27 @@ Invoke-RestMethod "http://localhost:8000/search?q=overpressure" | ConvertTo-Json
 # Get a specific node
 $node = (Invoke-RestMethod "http://localhost:8000/search?q=overpressure")[0].id
 Invoke-RestMethod "http://localhost:8000/nodes/$node" | ConvertTo-Json -Depth 3
----------------------------------------------------------------------------------------
-API reference
-Full interactive docs: http://localhost:8000/docs
+```
 
-Endpoint	Method	Purpose
-/health	GET	Liveness check
-/debug/llm-config	GET	Show running provider, model, key prefix
-/sections?version=latest|N	GET	Top-level sections
-/nodes/{id}	GET	Node detail with body, hash, children
-/search?q=...&version=...	GET	Search heading + body
-/nodes/{id}/diff	GET	Cross-version diff hunks
-/selections	POST	Create version-pinned selection
-/selections	GET	List all selections
-/selections/{id}	GET	Get with pinned snapshots
-/selections/{id}	DELETE	Delete
-/selections/{id}/generate?force=false	POST	Generate test cases
-/generations?selection_id=X&node_id=Y	GET	List with staleness summary
-/generations/{id}	GET	Full record + staleness block
-/generations/{id}/staleness	GET	Staleness-only report
----------------------------------------------------------------------------------------
-#Test Suite 
+---
 
+## Test suite
+
+```bash
 pytest -q                          # full suite
 pytest -v                          # verbose
-pytest tests/test_staleness.py    # one module
-pytest -k "survives_reingest"     # one test
-pytest -k "critical"              # all critical-severity tests
----------------------------------------------------------------------------------------
-#Project Structure
+pytest tests/test_staleness.py     # one module
+pytest -k "survives_reingest"      # one test
+pytest -k "critical"               # all critical-severity tests
+```
+
+Both `data/raw/ct200_manual.pdf` and `data/raw/ct200_manual_v2.pdf` must exist. Tests use an in-memory SQLite database and a deterministic fake LLM, so no network access or API key is needed.
+
+---
+
+## Project structure
+
+```
 tri9t-ai/
 ├── app/
 │   ├── main.py               FastAPI entry point
@@ -267,46 +349,43 @@ tri9t-ai/
 ├── .env.example
 ├── .gitignore
 └── README.md                 (this file)
+```
 
----------------------------------------------------------------------------------------
+---
 
-Troubleshooting
-Symptom	Fix
-401 Unauthorized from LLM	GROQ_API_KEY invalid or revoked. Test directly: curl.exe https://api.groq.com/openai/v1/models -H "Authorization: Bearer gsk_..." → must return HTTP 200. Get fresh key at https://console.groq.com/keys
-/debug/llm-config shows groq_key_length: 0	.env not loaded. Verify file exists at repo root, saved as UTF-8 without BOM, and restart uvicorn (.env is not hot-reloaded)
-Port 8000 already in use	Get-NetTCPConnection -LocalPort 8000 → Stop-Process -Id <pid> -Force
-pytest fails on test_selection_survives_reingest	Ensure both data/raw/ct200_manual.pdf and data/raw/ct200_manual_v2.pdf exist
-status: MALFORMED on generation	Check attempts[].error — usually schema mismatch or 401. Retry with ?force=true after fixing key
-Staleness shows not_applicable	The generation was MALFORMED (no test cases exist). Regenerate with ?force=true
-Staleness shows fresh when you expected stale	You generated against the latest version (v2). Use ?version=1 in /search to pin to v1 for the v1→v2 comparison
-path shows â¯ (mojibake)	Old generation created before unicode normalization. Regenerate with ?force=true
-ModuleNotFoundError: app	You must be in tri9t-ai/ directory when running pytest/python
-sqlalchemy.exc.OperationalError: no such table	DB not created. Run python -m scripts.ingest_cli ... once (creates tables)
----------------------------------------------------------------------------------------
-Design decisions
+## Troubleshooting
 
-Version-pinned selections store frozen snapshots — not just foreign keys — so old selections resolve to their exact original text after re-ingest. Verified by test_selection_survives_reingest.
+| Symptom | Fix |
+|---|---|
+| `401 Unauthorized` from LLM | `GROQ_API_KEY` is invalid or revoked. Test it directly: `curl.exe https://api.groq.com/openai/v1/models -H "Authorization: Bearer gsk_..."` must return HTTP 200. Get a fresh key at <https://console.groq.com/keys>. |
+| `/debug/llm-config` shows `groq_key_length: 0` | `.env` was not loaded. Check the file exists at the repo root, is saved as UTF-8 without BOM, then restart `uvicorn` (`.env` is not hot-reloaded). |
+| Port 8000 already in use | `Get-NetTCPConnection -LocalPort 8000`, then `Stop-Process -Id <pid> -Force`. |
+| `pytest` fails on `test_selection_survives_reingest` | Ensure both `data/raw/ct200_manual.pdf` and `data/raw/ct200_manual_v2.pdf` exist. |
+| `status: MALFORMED` on generation | Check `attempts[].error` — usually a schema mismatch or a 401. Fix the cause, then retry with `?force=true`. |
+| Staleness shows `not_applicable` | The generation was `MALFORMED` (no test cases exist). Regenerate with `?force=true`. |
+| Staleness shows `fresh` when you expected `stale` | The generation was made against the latest version (v2). Use `?version=1` in `/search` to pin to v1 for the v1 → v2 comparison. |
+| Path shows `â¯` (mojibake) | Old generation created before Unicode normalization. Regenerate with `?force=true`. |
+| `ModuleNotFoundError: app` | Run `pytest` / `python` from inside the `tri9t-ai/` directory. |
+| `sqlalchemy.exc.OperationalError: no such table` | The database has not been created. Run `python -m scripts.ingest_cli ...` once (it creates the tables). |
 
-Two-tier staleness classifier — a regex pre-filter runs before word-diff, so 300→250 cycles is critical while starts→begins is minor. This is the assignment's core question about whether one-word changes should be treated the same as threshold changes.
+---
 
-Content-addressed idempotency — same prompt content hits the cache; failed (MALFORMED) generations never poison the cache.
+## Design decisions
 
-5 layers of LLM validation — provider JSON mode → fence stripping → field coercion → schema validation → enum enforcement.
+The full reasoning, bug log and decision-log answers are in [`docs/APPROACH.md`](docs/APPROACH.md). In brief:
 
-Permanent LLM errors fail fast — 401/403 stop after 1 attempt instead of burning 3.
+- **Version-pinned selections store frozen snapshots**, not just foreign keys, so old selections resolve to their exact original text after re-ingest. Verified by `test_selection_survives_reingest`.
+- **Two-tier staleness classifier.** A regex pre-filter runs before word-diff, so `300→250 cycles` is `critical` while `starts→begins` is `minor`. This answers the assignment's core question about whether a one-word change should be treated like a threshold change.
+- **Content-addressed idempotency.** Identical prompt content hits the cache; failed (`MALFORMED`) generations never poison it.
+- **Five layers of LLM output validation.** Provider JSON mode → fence stripping → field coercion → schema validation → enum enforcement.
+- **Permanent LLM errors fail fast.** `401`/`403` stop after one attempt instead of burning all three.
+- **`MALFORMED` generations report `not_applicable` staleness.** There are no test cases to be fresh about.
 
-MALFORMED generations report not_applicable staleness — nothing to be fresh about when there are zero test cases.
+### Deliberate non-features
 
-Deliberately no UI, no auth, no generic parser — all explicitly out of scope per the assignment.
+Out of scope per the assignment, and intentionally not built:
 
-Deliberate non-features (per assignment "out of scope" section):
-
-❌ No UI — JSON API only. /docs is FastAPI's auto-generated Swagger. Postman collection covers the demo.
-
-❌ No auth — every endpoint is unauthenticated by design.
-
-❌ No generic PDF parser — heuristics are CT-200-specific (TABLE_HEADER_WORDS, NUMBERED regex). Would fail gracefully on other PDFs — which is per the assignment's framing.
-
-❌ No auto-regeneration — staleness is detected automatically but re-generation requires an explicit POST.
-
----------------------------------------------------------------------------------------
+- **No UI** — JSON API only. `/docs` is FastAPI's auto-generated Swagger UI, and the Postman collection covers the demo.
+- **No auth** — every endpoint is unauthenticated by design.
+- **No generic PDF parser** — heuristics are CT-200-specific (`TABLE_HEADER_WORDS`, the `NUMBERED` regex). It fails gracefully on other PDFs, in line with the assignment's framing.
+- **No auto-regeneration** — staleness is detected automatically, but regenerating requires an explicit `POST`.
