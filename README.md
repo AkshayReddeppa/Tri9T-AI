@@ -138,6 +138,10 @@ Remove-Item data/generations/*.json -ErrorAction SilentlyContinue
 python -m scripts.ingest_cli data/raw/ct200_manual.pdf "CardioTrack CT-200"
 # → ✅ Ingested v1 — 30 nodes
 
+# --- Ingest v2 ---
+python -m scripts.ingest_cli data/raw/ct200_manual_v2.pdf "CardioTrack CT-200"
+# → ✅ Ingested v2 — 31 nodes
+
 # --- Generate test cases against a v1 node that changes in v2 ---
 # Battery Life: v1 says "300 cycles, 15%" → v2 says "250 cycles, 10%"
 $bid  = (Invoke-RestMethod "http://localhost:8000/search?q=battery%20life&version=1")[0].id
@@ -146,10 +150,6 @@ $bsel = Invoke-RestMethod -Method Post -Uri http://localhost:8000/selections `
         -Body (@{name="battery-v1-qa"; node_ids=@($bid)} | ConvertTo-Json)
 $bgen = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/selections/$($bsel.id)/generate"
 Write-Host "Generated against v1: $($bgen.status)"
-
-# --- Ingest v2 ---
-python -m scripts.ingest_cli data/raw/ct200_manual_v2.pdf "CardioTrack CT-200"
-# → ✅ Ingested v2 — 31 nodes
 
 # --- Check staleness (expected: STALE / CRITICAL) ---
 Invoke-RestMethod "http://localhost:8000/generations/$($bgen.id)/staleness" | ConvertTo-Json -Depth 5
